@@ -1,0 +1,121 @@
+---
+title: "Final Proiect"
+author: "Abhisek"
+date: "December 14, 2016"
+output: html_document
+---
+
+#Needed Packages
+rm(list=ls())
+if (!("plyr" %in% names(installed.packages()[,"Package"]))) {install.packages("plyr")}
+suppressMessages(library(plyr, quietly = TRUE))
+if (!("Rcpp" %in% names(installed.packages()[,"Package"]))) {install.packages("Rcpp")}
+suppressMessages(library(Rcpp, quietly = TRUE))
+if (!("mice" %in% names(installed.packages()[,"Package"]))) {install.packages("mice")}
+suppressMessages(library(mice, quietly = TRUE))
+if (!("ggplot2" %in% names(installed.packages()[,"Package"]))) {install.packages("ggplot2")}
+suppressMessages(library(ggplot2, quietly = TRUE))
+if (!("lattice" %in% names(installed.packages()[,"Package"]))) {install.packages("lattice")}
+suppressMessages(library(lattice, quietly = TRUE))
+if (!("survey" %in% names(installed.packages()[,"Package"]))) {install.packages("survey")}
+suppressMessages(library(survey, quietly = TRUE))
+
+#importing the training dataset
+adult<-read.csv('https://www.dropbox.com/s/qmpnbl815tn9665/training_dataset.csv?dl=1',strip.white = TRUE, na.strings = c("NA","?"))
+head(adult)
+dim(adult)
+
+#Removing irrelavent columns 
+adult <- subset(adult, select=-c(X, X.1, X.2, X.3, fnlwgt))
+
+# checking for null values
+sapply(adult, function(x) sum(is.na(x)))
+str(adult)
+
+# 3 variables have values which are NA
+
+nrow(adult[adult$workclass=='NA',])
+#1836
+nrow(adult[adult$occupation=='NA',])
+#1843
+nrow(adult[adult$country=='NA',])
+#583
+
+# these values need to be imputed given they are more than 5% of the total training dataset
+
+library(car)
+library(MASS)
+
+# Method 1
+#find the most common value
+mcv.workclass<-factor(names(which.max(table(adult$workclass))), levels=levels(adult$workclass))
+mcv.workclass
+
+adult$workclass.imp<-as.factor(ifelse(is.na(adult$workclass)==T, mcv.workclass, adult$workclass))
+levels(adult$workclass.imp)<-levels(adult$workclass)
+
+prop.table(table(adult$workclass))
+prop.table(table(adult$workclass.imp))
+barplot(prop.table(table(adult$workclass)), main="Original Data", ylim=c(0, .6))
+barplot(prop.table(table(adult$workclass.imp)), main="Imputed Data",ylim=c(0, .6))
+
+# we will not use this given that that there are better and more accurate ways to deal with missing values
+
+# Method 2 
+#Imputing missing data with R; MICE package
+
+#analysisng pattern in missing values
+md.pattern(adult[,c("workclass", "occupation", "country")])
+md.pairs(adult[,c("workclass", "occupation", "country")])
+
+#Using linear discriminant analysis to impute values
+#training set
+
+imp<-mice(data = adult, method="lda", m= 5, seed = 22)
+head(imp$imp)
+
+dat.imp<-complete(imp)
+
+# LDA could not solve the matrix inverse for workclass because the within-class covariance matrix was singular
+#using polychtomous logistic regression to impute values for workclass
+
+imp<-mice(data = dat.imp, method="lda", m= 5, seed = 22)
+
+adult_imp<-complete(imp)
+
+# checking for null values
+sapply(adult_imp, function(x) sum(is.na(x)))
+
+# checking for dimensions and datatype
+head(adult_imp)
+dim(adult_imp)
+str(adult_imp)
+
+write.csv(adult_imp, file = "imp_data_train.csv")
+
+# test_data
+test1<-read.csv('https://www.dropbox.com/s/5golodtex4s67l8/test_set.csv?dl=1',strip.white = TRUE, na.strings = c("NA","?"))
+
+#checking for null values
+sapply(test, function(x) sum(is.na(x)))
+
+#analysisng pattern in missing values
+md.pattern(adult[,c("workclass", "occupation", "country")])
+md.pairs(adult[,c("workclass", "occupation", "country")])
+
+#Using ploytomous logistic regression to impute values
+#training set
+imp_test<-mice(data = test, method="lda", m= 5, seed = 22)
+head(imp$imp)
+
+adult_test<-complete(imp_test)
+
+# checking for null values
+sapply(adult_test, function(x) sum(is.na(x)))
+
+# checking for dimensions and datatype
+head(adult_test)
+dim(adult_test)
+str(adult_test)
+
+write.csv(adult_test, file = "imp_test_data.csv")

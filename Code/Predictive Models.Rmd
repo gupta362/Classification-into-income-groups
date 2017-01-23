@@ -1,0 +1,429 @@
+---
+title: "Model Building"adult
+author: "Abhisek"
+date: "December 15, 2016"
+output: html_document
+---
+
+if (!("caret" %in% names(installed.packages()[,"Package"]))) {install.packages("caret")}
+suppressMessages(library(caret, quietly = TRUE))
+if (!("plyr" %in% names(installed.packages()[,"Package"]))) {install.packages("plyr")}
+suppressMessages(library(plyr, quietly = TRUE))
+if (!("ade4" %in% names(installed.packages()[,"Package"]))) {install.packages("ade4")}
+suppressMessages(library(ade4, quietly = TRUE))
+if (!("MASS" %in% names(installed.packages()[,"Package"]))) {install.packages("MASS")}
+suppressMessages(library(MASS, quietly = TRUE))
+if (!("rpart" %in% names(installed.packages()[,"Package"]))) {install.packages("rpart")}
+suppressMessages(library(rpart, quietly = TRUE))
+if (!("pROC" %in% names(installed.packages()[,"Package"]))) {install.packages("pROC")}
+suppressMessages(library(pROC, quietly = TRUE))
+if (!("GGally" %in% names(installed.packages()[,"Package"]))) {install.packages("GGally")}
+suppressMessages(library(GGally, quietly = TRUE))
+if (!("gridExtra" %in% names(installed.packages()[,"Package"]))) {install.packages("gridExtra")}
+suppressMessages(library(gridExtra, quietly = TRUE))
+if (!("lattice" %in% names(installed.packages()[,"Package"]))) {install.packages("lattice")}
+suppressMessages(library(lattice, quietly = TRUE))
+
+#importing the imputed datasets
+# training set
+
+train <- read.csv('https://www.dropbox.com/s/l8emvvych9p9r1q/imp_data_train.csv?dl=1',strip.white = TRUE, na.strings = c("NA","?"))
+dim(train)
+str(train)
+sapply(train, function(x) sum(is.na(x)))
+
+#dropping index and fnlwgt column for which explanation is not present
+train <- subset(train, select=-c(X, fnlwgt))
+
+# Changing levels of target distribution
+levels(train$income_flag) <- make.names(levels(factor(train$income_flag)))
+train$income_flag <- revalue(train$income_flag, c("X..50K"="less_eq", "X.50K"="high"))
+
+str(train$income_flag)
+count(train$income_flag)
+
+#make names for target and setting up as positive class
+train$income_flag <- relevel(train$income_flag, "high")
+levels(train$income_flag)
+
+#test set
+test<-read.csv('https://www.dropbox.com/s/x3epoxmfv06tc15/imp_test_data.csv?dl=1',strip.white = TRUE, na.strings = c("NA","?"))
+
+dim(test)
+str(test)
+sapply(test, function(x) sum(is.na(x)))
+
+#dropping index and fnlwgt column for which explanation is not present
+test <- subset(test, select=-c(X, fnlwgt))
+
+# Changing levels of target distribution
+levels(test$income_flag) <- make.names(levels(factor(test$income_flag)))
+test$income_flag <- revalue(test$income_flag, c("X..50K."="less_eq", "X.50K."="high"))
+
+str(test$income_flag)
+count(test$income_flag)
+
+#setting high as positive class
+test$income_flag <- relevel(test$income_flag, "high")
+### checking for correlations between quantitative variables
+
+pairs(train[,c(1,4, 10:12)])
+
+corm <- cor(train[,c(1,4, 10:12)])
+corm
+#defining a cutoff
+cut_off <-0.75
+
+# looping through the correlation matrix to identify multicollinear variables with coeffecients greater than 0.75
+
+for (i in 1:dim(corm)[1]) {
+  for (j in 1:dim(corm)[2]) {
+      if(abs(corm[i,j]) < cut_off | i==j) {
+         corm[i,j] <- NA
+      }   else{
+            corm[i,j] <- corm[i,j]
+      }
+  }
+}
+
+corm
+# none of the numerical variables have strong collinearity
+
+str(train$income_flag)
+
+## some plots to identify relationships
+
+plot1 <- ggplot(data = train) +
+geom_boxplot(aes(x = as.factor(income_flag), y = age, fill = factor(income_flag))) +
+labs(title = "Age vs Income Group",x="Income Group",y="Age") + guides(fill = FALSE)
+
+plot2 <- ggplot(data = train) +
+geom_boxplot(aes(x = as.factor(income_flag), y = edu_noy, fill = factor(income_flag))) +
+labs(title = "Education(NOY) vs Income Group",x="Income Group",y="Education(NOY)") + guides(fill = FALSE)
+
+plot3 <- ggplot(data = train) +
+geom_boxplot(aes(x = as.factor(income_flag), y = capital_gain+capital_loss, fill = factor(income_flag))) +
+labs(title = "Net Capital Gain/Loss  vs Income Group",x="Income Group",y="Net Capital Gain/Loss") + guides(fill = FALSE)
+
+plot4 <- ggplot(data = train) +
+geom_boxplot(aes(x = as.factor(income_flag), y = hours_per_week, fill = factor(income_flag))) +
+labs(title = "Hours Per Week vs Income Group",x="Income Group",y="Hours Per Week") + guides(fill = FALSE)
+
+## arrangin plots
+grid.arrange(plot1, plot2, plot3, plot4, ncol=2, nrow=2)
+
+par(mfrow=c(1,1))
+
+##analysis of categorical variables
+## Mosaic plots for  interface for tabulated data:
+
+mosaicplot(race ~ income_flag , data = train,
+            main = "Income Group by Race", 
+            color = TRUE)
+
+mosaicplot( marital_status ~ income_flag, data = train,
+            main = "Income Group by Marital Status", 
+            color = TRUE)
+
+rm(plot1,plot2, plot3, plot4,i,j)
+
+# creating dummy variables for categorical variables in dataset 
+
+dummy_var <- function(df) {  
+  
+  NUM <- function(dataframe)dataframe[,sapply(dataframe,is.numeric)]
+  FAC <- function(dataframe)dataframe[,sapply(dataframe,is.factor)]
+  
+  require(ade4)
+  if (is.null(ncol(NUM(df)))) {
+    DF <- data.frame(NUM(df), acm.disjonctif(FAC(df)))
+    names(DF)[1] <- colnames(df)[which(sapply(df, is.numeric))]
+  } else {
+    DF <- data.frame(NUM(df), acm.disjonctif(FAC(df)))
+  }
+  return(DF)
+} 
+
+
+##Defining sampling method
+ctrl <- trainControl(classProbs = TRUE,
+                     method="cv", number=20,
+                     returnResamp = "final",
+                     summaryFunction = twoClassSummary)
+
+#running logit model
+logit <- train(income_flag ~ .,
+               data = train,
+               method = "glm",
+               family = "binomial",
+               trControl = ctrl,
+               metric = "ROC")
+warnings()               
+
+##there are warnings of rank-deficient model, which might be the issue with lack of enough data points or the units have a lot of difference
+#lets try centering and scaling to account for difference in units and see if it solves the problem
+
+logit1 <- train(income_flag ~ .,
+               data = train,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+warnings()
+
+##Rank-deficient warnings still exit which mean that we might need to remove categorical variables with maximum levels as there mgiht not be enough data points to do linear computations
+str(train)
+#country has 41 levels, so we will start from there
+
+train_v1 <- subset(train, select=-c(country))
+
+logit2 <- train(income_flag ~ .,
+               data = train_v1,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+warnings()
+summary(logit2)
+
+# Dropping other insignificant variables with p-values greater than 0.8 to see if it solves the problem
+
+train_v2 <- dummy_var(train_v1[,c(1:12)])
+str(train_v1)
+head(train_v2)
+
+train_v2 <- cbind(train_v2,train_v1$income_flag)
+colnames(train_v2)[64] <- "income_flag"
+
+train_v2 <- subset(train, select=-c(country, occupation))
+
+logit3 <- train(income_flag ~ .,
+               data = train_v2,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit3) 
+
+## none of the workclass is significant so we drop them
+
+train_v2 <- subset(train, select=-c(country, workclass))
+
+train_v2 <- dummy_var(train_v2[,c(1:11)])
+str(train_v1)
+head(train_v2)
+
+train_v2 <- cbind(train_v2,train_v1$income_flag)
+colnames(train_v2)[56] <- "income_flag"
+
+logit3 <- train(income_flag ~ .,
+               data = train_v2,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit3) 
+
+
+# dropping insignificant variables in education
+
+train_v3 <- subset(train_v2, select=-c(education.10th, education.11th, education.12th, education.1st.4th, 
+education.5th.6th, education.7th.8th, education.9th,education.Assoc.voc,education.Doctorate,        
+education.HS.grad,education.Masters,education.Preschool))
+
+logit4 <- train(income_flag ~ .,
+               data = train_v3,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit4)
+
+#dropping other insignificant variables from education and marital status
+train_v3 <- subset(train_v3, select=-c(education.Bachelors,education.Prof.school,
+marital_status.Divorced,marital_status.Married.spouse.absent, marital_status.Separated))
+
+logit4 <- train(income_flag ~ .,
+               data = train_v3,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit4)
+
+#dropping other insignificant variables from education and marital status
+train_v3 <- subset(train_v3, select=-c(education.Some.college,marital_status.Widowed,
+occupation.Armed.Forces,occupation.Craft.repair, occupation.Machine.op.inspct, race.Asian.Pac.Islander,
+race.Black))
+
+logit4 <- train(income_flag ~ .,
+               data = train_v3,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit4)
+
+#dropping last insignificant variable
+
+train_v3 <- subset(train_v3, select= -c(occupation.Transport.moving))
+
+set.seed(2000)
+logit4 <- train(income_flag ~ .,
+               data = train_v3,
+               method = "glm",
+               family = "binomial",
+               preProcess = c("center", "scale"),
+               trControl = ctrl,
+               metric = "ROC")
+summary(logit4)
+
+### problem of rank-deficient is solved but it comes at a cost of removing some important categorical variables, logit might not be the best model for the dataset but we can still check for test accuracy
+
+# removing not needed datsets and variables
+
+rm(i,j,cut_off,logit, logit1, logit2, logit3, train_v1, train_v2)
+
+## modifying test dataset to get probabilities
+str(test)
+test_v1 <- dummy_var(test[,c(1:13)])
+str(test_v1)
+head(test_v1)
+
+test_v1 <- cbind(test_v1,test$income_flag)
+colnames(test_v1)[104] <- "income_flag"
+
+#predicting probabilities on the test set
+logitProbs <- predict(logit4, newdata=test_v1, type="prob")[,1]
+##predicting classes on the test set
+logitClasses <- predict(logit4, newdata = test_v1)
+##assess models
+confusionMatrix(data = logitClasses, test_v1$income_flag)
+
+#Predictions using lda model
+
+set.seed(2000)
+lda <- train(income_flag ~ .,
+               data = train,
+               method = "lda",
+               trControl = ctrl,
+               preProcess = c("center", "scale"),
+               metric = "ROC")
+lda
+warnings()
+
+#predicting probabilities on the test set
+ldaProbs <- predict(lda, newdata=test, type="prob")[,1]
+##predicting classes on the test set
+ldaClasses <- predict(lda, newdata = test)
+##assess models
+confusionMatrix(data = ldaClasses, test$income_flag)
+
+## Running a CART
+
+set.seed(2000)
+class_tree <- train(income_flag~.,
+                  data = train,
+                  method = "rpart",
+                  trControl = ctrl,
+                  tuneLength = 20,
+                  preProcess = c("center", "scale"),
+                  metric = "ROC")
+
+## checking the results
+class_tree
+
+#plotting the CV tree to see optimal number of terminal nodes
+plot(class_tree)
+
+#plotting the CV tree to see optimal number of terminal nodes
+par(mfrow=c(1,1))
+plot(class_tree$finalModel)
+text(class_tree$finalModel)
+#predicting probabilities on the test set
+treeProbs <- predict(class_tree, newdata=test, type="prob")[,1]
+##predicting classes on the test set
+treeClasses <- predict(class_tree, newdata = test)
+##assess models
+confusionMatrix(data = treeClasses, test$income_flag)
+
+# makign roc curve forall models
+
+#plot ROC curves
+#lda
+ldaCurve <- roc(response= test$income_flag,
+                predictor = ldaProbs,
+                levels = rev(levels(test$income_flag))
+                )
+#Logit
+logitCurve <- roc(response= test_v1$income_flag,
+                predictor = logitProbs,
+                levels = rev(levels(test_v1$income_flag))
+                )
+
+#CART
+treeCurve <- roc(response= test$income_flag,
+                predictor = treeProbs,
+                levels = rev(levels(test$income_flag))
+                )                
+                
+#plotting them
+#reset graphics parameter to 1 plot
+par(mfrow=c(1,1)) 
+
+plot(logitCurve, legacy.axes=T, col="red"
+     , main="Receiver Operating Characteristic (ROC) Curve")
+lines(ldaCurve, col="blue")
+lines(treeCurve, col="green")
+legend("bottomright", inset=0, title="Model", border="white", bty="n", cex=.8
+       , legend=c("Logit","LDA","CART")
+       , fill=c("red","blue","green"))
+
+### Final results on the test set
+
+
+models = c("Logit","LDA","CART")
+stats = c("Accuracy","Sensitivity","Specificity","AUC")
+m1 = cbind(confusionMatrix(data=logitClasses, test_v1$income_flag)$overall["Accuracy"][[1]]
+      ,confusionMatrix(data=logitClasses, test_v1$income_flag)$byClass["Sensitivity"][[1]]
+      ,confusionMatrix(data=logitClasses, test_v1$income_flag)$byClass["Specificity"][[1]]
+      ,auc(logitCurve)[1])
+m2 = cbind(confusionMatrix(data = ldaClasses, test$income_flag)$overall["Accuracy"][[1]]
+      ,confusionMatrix(data = ldaClasses, test$income_flag)$byClass["Sensitivity"][[1]]
+      ,confusionMatrix(data = ldaClasses, test$income_flag)$byClass["Specificity"][[1]]
+      ,auc(ldaCurve)[1])
+m3 = cbind(confusionMatrix(data=treeClasses, test$income_flag)$overall["Accuracy"][[1]]
+      ,confusionMatrix(data=treeClasses, test$income_flag)$byClass["Sensitivity"][[1]]
+      ,confusionMatrix(data=treeClasses, test$income_flag)$byClass["Specificity"][[1]]
+      ,auc(treeCurve)[1])
+
+results <- data.frame(rbind(m1,m2,m3))
+row.names(results) <- models
+names(results) <- c(stats)
+results
+
+# Resampling and seeing the variation in specificity, sensitivity and ROC for all the three models
+
+resamps <- resamples(list(Logit = logit4,                    
+                          LDA = lda,
+                           CART = class_tree), 
+                           n=20)
+resamps
+
+summary(resamps)
+
+### box plot of all three metrics for all the models
+bwplot(resamps, layout = c(3, 1))
+
+##scatter plot of ROC for various resamples for all the three models
+splom(resamps)
+
+
+##########*****************************************************************************###########
